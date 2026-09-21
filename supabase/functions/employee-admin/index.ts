@@ -11,6 +11,23 @@ const cors = {
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: cors });
+const esc = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+const sendInvitation = async (employee: { full_name: string; email: string }) => {
+  const key = Deno.env.get("RESEND_API_KEY");
+  if (!key) return false;
+  const appUrl = Deno.env.get("APP_URL") || "https://augustum-tid-test-post-2630s-projects.vercel.app";
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "Idempotency-Key": `employee-invitation-${employee.email.toLowerCase()}` },
+      body: JSON.stringify({
+        from: "Augustum Tid <post@apartstavanger.no>", to: [employee.email], subject: "Velkommen til Augustum Tid",
+        html: `<div style="font-family:Arial,sans-serif;max-width:600px;line-height:1.55;color:#17211f"><h2>Velkommen til Augustum Tid</h2><p>Hei ${esc(employee.full_name)}.</p><p>Du er invitert til Augustum Tid, systemet vi bruker til arbeidstid, ferie, fravær og HR-dokumenter.</p><h3>Slik logger du inn</h3><ol><li>Åpne <a href="${appUrl}">${appUrl}</a>.</li><li>Skriv inn e-postadressen denne invitasjonen ble sendt til.</li><li>Du mottar en engangskode på e-post. Skriv inn koden for å logge inn.</li></ol><h3>Stemple inn og ut</h3><ol><li>Åpne Augustum Tid på telefonen.</li><li>Trykk på knappen for å skanne QR-koden på arbeidsstedet.</li><li>Tillat posisjon når telefonen spør. Posisjonen kontrolleres bare når du stempler.</li><li>Skann koden for å stemple inn. Gjenta når du skal stemple ut.</li></ol><p>Ta kontakt med administrasjonen dersom du ikke mottar innloggingskoden eller trenger hjelp.</p><p>Vennlig hilsen<br>Augustum AS</p></div>`,
+      }),
+    });
+    return response.ok;
+  } catch { return false; }
+};
 
 const validRole = (value: unknown): value is "employee" | "manager" | "admin" =>
   value === "employee" || value === "manager" || value === "admin";
@@ -133,7 +150,7 @@ Deno.serve(async (req: Request) => {
 
   if (req.method === "GET") {
     const [{ data, error }, { data: entries, error: entriesError }, { data: detailRows, error: detailsError }] = await Promise.all([
-      admin.from("employees").select("id, employee_number, full_name, email, phone_number, role, active, created_at, deactivated_at").eq("organization_id", currentEmployee.organization_id).order("active", { ascending: false }).order("full_name"),
+      admin.from("employees").select("id, employee_number, full_name, email, phone_number, role, active, created_at, deactivated_at, invited_at").eq("organization_id", currentEmployee.organization_id).order("active", { ascending: false }).order("full_name"),
       admin.from("time_entries").select("id,employee_id,started_at,ended_at,source,auto_clocked_out").eq("organization_id", currentEmployee.organization_id).order("started_at", { ascending: false }).limit(500),
       admin.from("employee_private_details").select("employee_id,address,postal_code,city,bank_account,national_identity_number,employed_from,position_percent,salary_type,salary_rate").eq("organization_id", currentEmployee.organization_id),
     ]);
@@ -157,6 +174,29 @@ Deno.serve(async (req: Request) => {
     const content_base64 = await employeeReportPdf({ ...employee, ...(details || {}) });
     await admin.from("audit_logs").insert({ organization_id: currentEmployee.organization_id, actor_id: currentUser.id, action: "download_employee_report_pdf", entity_type: "employee", entity_id: id });
     return json({ content_base64, file_name: `ansattopplysninger-${employee.employee_number.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf` });
+  }
+
+  if (req.method === "POST" && action === "invite") {
+    const id = String(body.employee_id || "");
+    const { data: employee } = await admin.from("employees").select("id,auth_user_id,full_name,email,role,active,invited_at").eq("id", id).eq("organization_id", currentEmployee.organization_id).maybeSingle();
+    if (!employee) return json({ error: "Fant ikke den ansatte." }, 404);
+    if (!employee.active) return json({ error: "Den ansatte må være aktiv før invitasjon sendes." }, 409);
+    if (employee.invited_at) return json({ error: "Den ansatte er allerede invitert." }, 409);
+    let authUserId = employee.auth_user_id;
+    if (!authUserId) {
+      const { data: created, error: createError } = await admin.auth.admin.createUser({ email: employee.email, email_confirm: true, app_metadata: { role: employee.role }, user_metadata: { full_name: employee.full_name } });
+      if (createError || !created.user) return json({ error: createError?.message || "Kunne ikke opprette innlogging." }, 400);
+      authUserId = created.user.id;
+      const linkResult = await admin.from("employees").update({ auth_user_id: authUserId, updated_at: new Date().toISOString() }).eq("id", id).is("auth_user_id", null);
+      if (linkResult.error) { await admin.auth.admin.deleteUser(authUserId); return json({ error: "Innloggingen kunne ikke kobles til den ansatte." }, 400); }
+    }
+    const emailSent = await sendInvitation(employee);
+    if (!emailSent) return json({ error: "Innloggingen er klargjort, men invitasjonen kunne ikke sendes. Prøv igjen." }, 502);
+    const invitedAt = new Date().toISOString();
+    const result = await admin.from("employees").update({ invited_at: invitedAt, invited_by: currentUser.id, updated_at: invitedAt }).eq("id", id).is("invited_at", null).select("id,invited_at").maybeSingle();
+    if (result.error || !result.data) return json({ error: "Invitasjonen ble sendt, men statusen kunne ikke oppdateres." }, 500);
+    await admin.from("audit_logs").insert({ organization_id: currentEmployee.organization_id, actor_id: currentUser.id, action: "invite_employee", entity_type: "employee", entity_id: id, details: { email: employee.email } });
+    return json({ invited_at: invitedAt, email_sent: true });
   }
 
   if (req.method === "POST" && action === "manual_clock") {
@@ -199,13 +239,8 @@ Deno.serve(async (req: Request) => {
     if (!employeeNumber || !fullName || !/^\S+@\S+\.\S+$/.test(email) || !validRole(role)) {
       return json({ error: "Kontroller ansattnummer, navn, e-post og rolle." }, 400);
     }
-    const { data: created, error: createError } = await admin.auth.admin.createUser({
-      email, email_confirm: true, app_metadata: { role }, user_metadata: { full_name: fullName },
-    });
-    if (createError || !created.user) return json({ error: createError?.message || "Kunne ikke opprette innlogging." }, 400);
     const { data: employee, error } = await admin.from("employees").insert({
       organization_id: currentEmployee.organization_id,
-      auth_user_id: created.user.id,
       employee_number: employeeNumber,
       full_name: fullName,
       email,
@@ -213,12 +248,9 @@ Deno.serve(async (req: Request) => {
       role,
       active: true,
     }).select().single();
-    if (error) {
-      await admin.auth.admin.deleteUser(created.user.id);
-      return json({ error: error.message }, 400);
-    }
+    if (error) return json({ error: error.message }, 400);
     const detailResult = await admin.from("employee_private_details").insert({ employee_id: employee.id, organization_id: currentEmployee.organization_id, ...details, updated_by: currentUser.id });
-    if (detailResult.error) { await admin.from("employees").delete().eq("id", employee.id); await admin.auth.admin.deleteUser(created.user.id); return json({ error: detailResult.error.message }, 400); }
+    if (detailResult.error) { await admin.from("employees").delete().eq("id", employee.id); return json({ error: detailResult.error.message }, 400); }
     await admin.from("audit_logs").insert({
       organization_id: currentEmployee.organization_id,
       actor_id: currentUser.id,
