@@ -25,7 +25,8 @@
       </div>
       <section id="adminPanel" class="hidden">
         <nav class="admin-tabs" aria-label="Administrasjon">
-          <button class="admin-tab active" data-panel="employeesPanel">Ansatte</button>
+          <button class="admin-tab active" data-panel="dashboardPanel">Oversikt</button>
+          <button class="admin-tab" data-panel="employeesPanel">Ansatte</button>
           <button class="admin-tab" data-panel="approvalPanel">Godkjenning</button>
           <button class="admin-tab" data-panel="reportsPanel">Dagsrapporter</button>
           <button class="admin-tab" data-panel="summaryReportsPanel">Rapporter</button>
@@ -37,7 +38,8 @@
           <button class="admin-tab" data-panel="rosterAdminPanel">Vaktliste</button>
           <button class="admin-tab" data-panel="qrPanel">QR-kode</button>
         </nav>
-        <section id="employeesPanel" class="admin-view">
+        <section id="dashboardPanel" class="admin-view"><div class="section-head dashboard-heading"><div><p class="eyebrow">Administrasjon</p><h2>Oversikt</h2><p id="dashboardDateLabel" class="muted"></p></div><div class="dashboard-date-nav"><button id="dashboardPrevious" class="secondary" aria-label="Forrige dag">← Forrige</button><button id="dashboardToday" class="secondary">I dag</button><button id="dashboardNext" class="secondary" aria-label="Neste dag">Neste →</button></div></div><div id="dashboardStats" class="dashboard-stats"></div><div class="dashboard-layout"><div><section class="card dashboard-panel"><div class="dashboard-panel-head"><div><p class="eyebrow">Bemanning</p><h3>Hvem kommer på jobb?</h3></div><span id="dashboardRosterSource" class="hint"></span></div><div id="dashboardPeople" class="dashboard-people"></div><p id="dashboardFallback" class="dashboard-note hidden"></p></section><section class="card dashboard-panel dashboard-activity"><div class="dashboard-panel-head"><div><p class="eyebrow">Siste hendelser</p><h3>Aktivitet i dag</h3></div></div><div id="dashboardActivity"></div></section></div><aside class="card dashboard-panel"><div class="dashboard-panel-head"><div><p class="eyebrow">Oppfølging</p><h3>Gjøremål</h3></div><span id="dashboardTaskBadge" class="status pending"></span></div><div id="dashboardTasks"></div></aside></div></section>
+        <section id="employeesPanel" class="admin-view hidden">
         <div class="section-head"><div><p class="eyebrow">Administrasjon</p><h2>Ansatte</h2></div><div class="tools"><input id="search" type="search" placeholder="Søk etter navn, nummer eller e-post"><button id="newEmployee" class="primary">+ Ny ansatt</button></div></div>
         <div class="card table-wrap"><table><thead><tr><th>Ansatt</th><th>Nr.</th><th>Kontakt</th><th>Rolle</th><th>Arbeidsstatus</th><th>Bruker</th><th></th></tr></thead><tbody id="rows"></tbody></table><div id="empty" class="empty hidden">Ingen ansatte funnet.</div></div>
         </section>
