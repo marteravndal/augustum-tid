@@ -28,8 +28,8 @@ Deno.serve(async (req: Request) => {
   if (authError || !authData.user) return json({ error: "Ugyldig innlogging." }, 401);
   const { data: employee } = await admin.from("employees").select("id,organization_id,employee_number,full_name,role,active").eq("auth_user_id", authData.user.id).maybeSingle();
   if (!employee?.active) return json({ error: "Brukeren er ikke aktiv." }, 403);
-  const { data: worksite } = await admin.from("worksites").select("id,name,address,latitude,longitude,radius_meters").eq("organization_id", employee.organization_id).eq("active", true).limit(1).maybeSingle();
-  if (!worksite || worksite.latitude == null || worksite.longitude == null || !Number.isFinite(Number(worksite.latitude)) || !Number.isFinite(Number(worksite.longitude)) || !Number.isFinite(Number(worksite.radius_meters)) || Number(worksite.radius_meters) <= 0) return json({ error: "Arbeidsstedet mangler posisjon." }, 503);
+  const { data: worksite } = await admin.from("worksites").select("id,name,address,latitude,longitude,radius_meters,position_required").eq("organization_id", employee.organization_id).eq("active", true).limit(1).maybeSingle();
+  if (!worksite || (worksite.position_required !== false && (worksite.latitude == null || worksite.longitude == null || !Number.isFinite(Number(worksite.latitude)) || !Number.isFinite(Number(worksite.longitude)) || !Number.isFinite(Number(worksite.radius_meters)) || Number(worksite.radius_meters) <= 0))) return json({ error: "Arbeidsstedet mangler posisjon." }, 503);
 
   if (req.method === "GET") {
     const since = new Date(Date.now() - 400 * 86400000).toISOString();
@@ -63,13 +63,16 @@ Deno.serve(async (req: Request) => {
   // Old cached clients must not auto-stamp when they open a QR link.
   if (body.qr_token || body.reserve_code) return json({ error: "Stempling er forenklet. Oppdater Augustum Tid og bruk knappen Stemple inn eller Stemple ut." }, 409);
   const latitude = body.latitude, longitude = body.longitude, accuracy = body.accuracy;
+  let distance = 0;
+  if (worksite.position_required !== false) {
   if (typeof latitude !== "number" || typeof longitude !== "number" || !Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return json({ error: "Posisjonen mangler. Tillat posisjon for Augustum Tid og prøv igjen." }, 400);
   if (typeof accuracy !== "number" || !Number.isFinite(accuracy) || accuracy <= 0) return json({ error: "Enheten oppga ikke posisjonsnøyaktighet. Aktiver nøyaktig posisjon og prøv igjen." }, 403);
   const positionTimestamp = body.position_timestamp;
   if (typeof positionTimestamp !== "number" || !Number.isFinite(positionTimestamp) || Date.now() - positionTimestamp > 120000 || positionTimestamp - Date.now() > 30000) return json({ error: "Posisjonen er for gammel eller ugyldig. Prøv igjen for å hente en ny posisjon." }, 403);
-  const distance = distanceMeters(latitude, longitude, Number(worksite.latitude), Number(worksite.longitude));
+  distance = distanceMeters(latitude, longitude, Number(worksite.latitude), Number(worksite.longitude));
   if (accuracy > 100) return json({ error: `Vi klarer ikke å bekrefte hvor du er. Posisjonen er for unøyaktig (${Math.round(accuracy)} meter). Prøv nær et vindu eller kontakt administrator.`, accuracy_meters: Math.round(accuracy) }, 403);
   if (distance > Number(worksite.radius_meters)) return json({ error: `Du må være på arbeidsstedet. Målt avstand er ${Math.round(distance)} meter; tillatt område er ${worksite.radius_meters} meter.`, distance_meters: Math.round(distance) }, 403);
+  }
   if (action === "check_position") return json({ valid: true, distance_meters: Math.round(distance), accuracy_meters: Math.round(accuracy) });
   const now = new Date();
   const { data: openEntry, error: openError } = await admin.from("time_entries").select("id,started_at").eq("employee_id", employee.id).is("ended_at", null).maybeSingle();
@@ -80,13 +83,13 @@ Deno.serve(async (req: Request) => {
     const { data: gate, error: gateError } = await admin.rpc("clock_in_gate", { p_employee_id: employee.id, p_organization_id: employee.organization_id });
     if (gateError || !gate) return json({ error: "Kunne ikke kontrollere vaktlisten. Prøv igjen." }, 503);
     if (!gate.allowed) return json({ error: gate.message, clock_in_gate: gate }, 409);
-    const { data: entry, error } = await admin.from("time_entries").insert({ organization_id: employee.organization_id, employee_id: employee.id, worksite_id: worksite.id, kind: "work", started_at: now.toISOString(), clock_in_latitude: latitude, clock_in_longitude: longitude, source: "location", created_by: authData.user.id }).select("id,started_at,ended_at").single();
+    const { data: entry, error } = await admin.from("time_entries").insert({ organization_id: employee.organization_id, employee_id: employee.id, worksite_id: worksite.id, kind: "work", started_at: now.toISOString(), clock_in_latitude: latitude ?? null, clock_in_longitude: longitude ?? null, source: "location", created_by: authData.user.id }).select("id,started_at,ended_at").single();
     if (error) return json({ error: error.message }, 409);
     await admin.from("audit_logs").insert({ organization_id: employee.organization_id, actor_id: authData.user.id, action: "clock_in", entity_type: "time_entry", entity_id: entry.id, details: { distance_meters: Math.round(distance), accuracy_meters: Number.isFinite(accuracy) ? Math.round(accuracy) : null, method: "location", location_check_required: true } });
     return json({ entry, distance_meters: Math.round(distance) }, 201);
   }
   if (!openEntry || body.open_entry_id !== openEntry.id) return json({ error: "Stemplingsstatusen er endret. Oppdater siden før du prøver igjen." }, 409);
-  const { data: entry, error } = await admin.from("time_entries").update({ ended_at: now.toISOString(), clock_out_latitude: latitude, clock_out_longitude: longitude, updated_at: now.toISOString() }).eq("id", openEntry.id).is("ended_at", null).select("id,started_at,ended_at").maybeSingle();
+  const { data: entry, error } = await admin.from("time_entries").update({ ended_at: now.toISOString(), clock_out_latitude: latitude ?? null, clock_out_longitude: longitude ?? null, updated_at: now.toISOString() }).eq("id", openEntry.id).is("ended_at", null).select("id,started_at,ended_at").maybeSingle();
   if (error) return json({ error: error.message }, 409);
   if (!entry) return json({ error: "Du er allerede stemplet ut. Oppdater siden." }, 409);
   await admin.from("audit_logs").insert({ organization_id: employee.organization_id, actor_id: authData.user.id, action: "clock_out", entity_type: "time_entry", entity_id: entry.id, details: { distance_meters: Math.round(distance), accuracy_meters: Number.isFinite(accuracy) ? Math.round(accuracy) : null, method: "location", location_check_required: true } });

@@ -119,7 +119,7 @@ DECLARE result jsonb;
 BEGIN
  result:=public.close_overdue_time_entries();
  IF EXISTS(SELECT 1 FROM public.auto_clock_notifications WHERE sent_at IS NULL AND NOT needs_review AND next_attempt_at<=now() AND (lease_until IS NULL OR lease_until<=now())) THEN
-  PERFORM net.http_post(url:='https://TEST_PROJECT_NOT_CONFIGURED.invalid/functions/v1/auto-clock-out',
+  PERFORM net.http_post(url:='https://krllcibcfuzsvjybqaua.supabase.co/functions/v1/auto-clock-out',
    headers:=jsonb_build_object('Content-Type','application/json','x-auto-clock-secret',(SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name='apart_auto_clock_worker')),
    body:='{}'::jsonb,timeout_milliseconds:=60000);
  END IF;

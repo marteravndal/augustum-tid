@@ -319,8 +319,7 @@ Deno.serve(async (req: Request) => {
     if (detailResult.error) return json({ error: detailResult.error.message }, 400);
     if (existing.auth_user_id) {
       const { error: authUpdateError } = await admin.auth.admin.updateUserById(existing.auth_user_id, {
-        email,
-        email_confirm: true,
+        ...(existing.portal_employee_id || existing.portal_actor_only ? {} : {email,email_confirm:true}),
         app_metadata: { role },
         user_metadata: { full_name: patch.full_name },
         ban_duration: active ? "none" : "876000h",

@@ -11,11 +11,17 @@ Dette er en **testgren**, ikke en produksjonsoppgradering. Den viderefører Apar
 - Alle Resend-kall stoppes i en egen testtransport. Ingen invitasjoner eller virksomhetsvarsler sendes fra denne grenen.
 - Bare offentlige frontendfiler publiseres; SQL, tester og serverkode følger ikke med nettstedet.
 
-## Ikke ferdigstilt / blokkert
+## Integrert testmiljø
 
-Testdatabasen er ikke opprettet. Innlogging, ende-til-ende-test, felles ansatte/innlogging fra transportportalen og overføring av timer til dagsoppgjør er derfor **ikke ferdige**. Ikke presenter dette som en fungerende integrasjon.
+Supabase-prosjektet `krllcibcfuzsvjybqaua` er opprettet av brukeren og koblet til en egen forhåndsvisning av Augustum Transport. Bruk portalens `/tid-test`, ikke produksjonsdomenet tid.augustum.no.
 
-Supabase-tilkoblingens `get_cost` returnerte `UNAVAILABLE` 14. oktober 2026. Ingen database, abonnement, eksisterende data eller produksjonsmiljø er endret.
+- Innlogging autoriseres i portalen ved hvert kall. En signert engangsforespørsel oppretter en serverintern økt i testdatabasen. Ingen test-token sendes til nettleseren.
+- Navn, kontaktopplysninger og aktiv status synkroniseres fra portalens ansattregister ved åpning. Ingen data kopieres fra Apart Tid eller gammel Augustum Tid.
+- Godkjente arbeidsintervaller kan fordeles på oppdragsgivere og overføres til et isolert testutkast i oppgjørstjenesten. Eksisterende oppgjør overskrives ikke.
+- Testmiljøet har mobilt arbeidssted uten posisjonskrav. Automatisk 12-timers utstempling er ikke planlagt. Vaktlistekravet fra Apart gjelder fortsatt ved ansattes egen stempling.
+- Alle virksomhets-e-poster er deaktivert. Innlogging gjennom portalen sender heller ingen kode på e-post.
+
+Produksjonsaktivering, transporttilpassede lønnsregler, nattarbeid og automatisert korrigeringssynkronisering gjenstår. Dette er et testgrunnlag, ikke ferdig lønnsproduksjon.
 
 ## Lokal kontroll
 
@@ -31,6 +37,4 @@ Uten konfigurasjon er innlogging deaktivert. Et nytt, isolert testprosjekt konfi
 
 Se [docs/transport-integration.md](docs/transport-integration.md). Migrasjonsrekken følger en fersk database fra Apart-utgangspunktet og må **ikke** kjøres samlet mot den eksisterende Augustum Tid-databasen eller transportportalen. Databasedifferansen må gjennomgås separat før en senere produksjonsoppgradering.
 
-Apart-spesifikke lønnstillegg, 12-timers automatisk utstempling og krav om posisjon på et fast arbeidssted er foreløpig bevart som eksisterende oppførsel i testkoden. De er ikke godkjente transportinnstillinger og må gjøres konfigurerbare før pilotdrift. Avsenderadresser og arbeidssteder må også hentes fra selskapets innstillinger.
-
-Ingen ansatte, timelister, personopplysninger eller dokumenter er kopiert fra Apart eller Augustum.
+Lønnstillegg fra Apart er fortsatt testgrunnlag og skal kontrolleres mot transportvirksomhetens avtaler før pilotdrift. De overstyrer ikke prisavtalene for dagsoppgjør.
