@@ -1,3 +1,4 @@
+import { previewEmail } from "../_shared/preview-email.ts";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.116.0";
 
@@ -18,8 +19,8 @@ Deno.serve(async(req:Request)=>{
 
   if(req.method==="GET"){
     const url=new URL(req.url),from=url.searchParams.get("from"),to=url.searchParams.get("to");
-    let query=admin.from("sick_leave_requests").select("id,employee_id,absence_type,start_date,end_date,status,routine_acknowledged_at,employee_note,admin_comment,handled_at,created_at,employees(employee_number,full_name,email)").eq("organization_id",me.organization_id).order("created_at",{ascending:false});
-    if(me.role!=="admin")query=query.eq("employee_id",me.id);else if(from&&to)query=query.lte("start_date",to).gte("end_date",from);
+    let query=admin.from("sick_leave_requests").select("id,employee_id,absence_type,start_date,end_date,status,routine_version,cancelled_at,cancellation_reason,routine_acknowledged_at,employee_note,admin_comment,handled_at,created_at,employees(employee_number,full_name,email)").eq("organization_id",me.organization_id).order("created_at",{ascending:false});
+    if(me.role!=="admin")query=query.eq("employee_id",me.id).is("cancelled_at",null);else if(from&&to)query=query.lte("start_date",to).gte("end_date",from);
     const {data:requests,error}=await query;if(error)return json({error:error.message},400);
     if(me.role!=="admin")return json({requests:requests||[],routine_version:routineVersion});
     const rangeFrom=from&&dateOk(from)?from:`${todayOslo().slice(0,4)}-01-01`,rangeTo=to&&dateOk(to)?to:todayOslo();
@@ -41,12 +42,15 @@ Deno.serve(async(req:Request)=>{
     const result=await admin.from("sick_leave_requests").insert({organization_id:me.organization_id,employee_id:me.id,absence_type:absenceType,start_date:start,end_date:end,routine_version:routineVersion,routine_acknowledged_at:new Date().toISOString(),employee_note:note||null}).select("id,status,created_at").single();
     if(result.error){if(result.error.code==="23505")return json({error:"Dette sykefraværet er allerede sendt inn."},409);return json({error:result.error.message},400)}
     await admin.from("audit_logs").insert({organization_id:me.organization_id,actor_id:authData.user.id,action:"submit_sick_leave",entity_type:"sick_leave_request",entity_id:result.data.id,details:{absence_type:absenceType,start_date:start,end_date:end,routine_version:routineVersion}});
-    let emailSent=false;const resendKey=Deno.env.get("RESEND_API_KEY");if(resendKey){const labels:{[key:string]:string}={self_certification:"Egenmelding",medical_certificate:"Sykmelding fra lege",sick_child:"Sykt barn"};try{const response=await fetch("https://api.resend.com/emails",{method:"POST",headers:{Authorization:`Bearer ${resendKey}`,"Content-Type":"application/json"},body:JSON.stringify({from:"Augustum Tid <post@apartstavanger.no>",to:["post@augustum.no"],subject:`Nytt sykefravær fra ${me.full_name}`,html:`<h2>Nytt sykefravær i Augustum Tid</h2><p><strong>${me.employee_number} · ${me.full_name}</strong></p><p>Type: ${labels[absenceType]}<br>Periode: ${start}${end!==start?`–${end}`:""}</p><p>Logg inn i Augustum Tid for å behandle meldingen.</p>`})});emailSent=response.ok}catch{/* Request remains saved even if notification fails. */}}
+    let emailSent=false;const resendKey=Deno.env.get("RESEND_API_KEY");if(resendKey){const labels:{[key:string]:string}={self_certification:"Egenmelding",medical_certificate:"Sykmelding fra lege",sick_child:"Sykt barn"};try{const response=await previewEmail("https://api.resend.com/emails",{method:"POST",headers:{Authorization:`Bearer ${resendKey}`,"Content-Type":"application/json"},body:JSON.stringify({from:"Augustum Tid <post@augustum.no>",to:["post@augustum.no"],subject:`Nytt sykefravær fra ${me.full_name}`,html:`<h2>Nytt sykefravær i Augustum Tid</h2><p><strong>${me.employee_number} · ${me.full_name}</strong></p><p>Type: ${labels[absenceType]}<br>Periode: ${start}${end!==start?`–${end}`:""}</p><p>Logg inn i Augustum Tid for å behandle meldingen.</p>`})});emailSent=response.ok}catch{/* Request remains saved even if notification fails. */}}
     return json({request:result.data,email_sent:emailSent},201);
   }
   if(req.method==="PATCH"&&action==="handle"){
     if(me.role!=="admin")return json({error:"Kun administrator har tilgang."},403);const id=String(body.id||""),status=String(body.status||""),comment=String(body.admin_comment||"").trim();if(!id||!["approved","rejected"].includes(status))return json({error:"Velg godkjenn eller avvis."},400);if(status==="rejected"&&comment.length<3)return json({error:"Skriv en kort kommentar ved avvisning."},400);
-    const {data,error}=await admin.rpc("process_sick_leave_request",{p_request_id:id,p_status:status,p_admin_comment:comment,p_handled_by:authData.user.id});if(error)return json({error:error.message},400);return json({result:data});
+    const {data,error}=await admin.rpc("process_sick_leave_request",{p_request_id:id,p_status:status,p_admin_comment:comment,p_handled_by:authData.user.id});if(error)return json({error:error.message},400);
+    let followupCaseId:string|null=null;if(status==="approved"){const result=await admin.rpc("ensure_sick_followup_case",{p_request_id:id,p_actor_id:authData.user.id});if(result.error)return json({error:`Fraværet ble godkjent, men oppfølgingssaken kunne ikke opprettes: ${result.error.message}`},500);followupCaseId=result.data}
+    return json({result:data,followup_case_id:followupCaseId});
   }
   return json({error:"Handling støttes ikke."},405);
 });
+

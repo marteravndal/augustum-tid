@@ -1,3 +1,4 @@
+import { previewEmail } from "../_shared/preview-email.ts";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.116.0";
 
@@ -8,7 +9,7 @@ const todayOslo=()=>new Intl.DateTimeFormat("sv-SE",{timeZone:"Europe/Oslo"}).fo
 const addDays=(value:string,days:number)=>{const d=new Date(`${value}T12:00:00Z`);d.setUTCDate(d.getUTCDate()+days);return d.toISOString().slice(0,10)};
 const weekdays=(from:string,to:string)=>{let count=0;for(let d=new Date(`${from}T12:00:00Z`),end=new Date(`${to}T12:00:00Z`);d<=end;d.setUTCDate(d.getUTCDate()+1)){const day=d.getUTCDay();if(day!==0&&day!==6)count++}return count};
 const esc=(value:unknown)=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!));
-const sendEmail=async(to:string[],subject:string,html:string)=>{const key=Deno.env.get("RESEND_API_KEY");if(!key)return false;try{const response=await fetch("https://api.resend.com/emails",{method:"POST",headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/json"},body:JSON.stringify({from:"Augustum Tid <post@apartstavanger.no>",to,subject,html})});return response.ok}catch{return false}};
+const sendEmail=async(to:string[],subject:string,html:string)=>{const key=Deno.env.get("RESEND_API_KEY");if(!key)return false;try{const response=await previewEmail("https://api.resend.com/emails",{method:"POST",headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/json"},body:JSON.stringify({from:"Augustum Tid <post@augustum.no>",to,subject,html})});return response.ok}catch{return false}};
 
 Deno.serve(async(req:Request)=>{
   if(req.method==="OPTIONS")return new Response("ok",{headers:cors});
