@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "build": "node scripts/build-preview.cjs",
-    "test": "node --test tests/preview-isolation.test.cjs tests/admin-clock-log.test.cjs tests/clock-register.test.cjs tests/control-assistant.test.cjs tests/course-diplomas.test.cjs tests/location-clock.test.cjs tests/payroll-dashboard.test.cjs tests/payroll-summary.test.cjs tests/report-premiums.test.cjs tests/weekly-review.test.cjs tests/cancel-manual-sick.test.cjs"
+    "test": "node --test tests/preview-isolation.test.cjs tests/admin-clock-log.test.cjs tests/clock-register.test.cjs tests/control-assistant.test.cjs tests/course-diplomas.test.cjs tests/location-clock.test.cjs tests/worksite-settings.test.cjs tests/payroll-dashboard.test.cjs tests/payroll-summary.test.cjs tests/report-premiums.test.cjs tests/weekly-review.test.cjs tests/cancel-manual-sick.test.cjs"
   },
   "devDependencies": {"pdf-lib":"1.17.1","jsdom":"26.1.0"},
   "engines":{"node":">=24"}
