@@ -22,12 +22,15 @@ Deno.serve(async(req:Request)=>{
   const admin=createClient(Deno.env.get("SUPABASE_URL")!,Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,{auth:{persistSession:false}});
   const {data:authData,error:authError}=await admin.auth.getUser(auth.slice(7));if(authError||!authData.user)return json({error:"Ugyldig innlogging."},401);
   const {data:me}=await admin.from("employees").select("id,organization_id,role,active,full_name,email").eq("auth_user_id",authData.user.id).maybeSingle();if(!me?.active)return json({error:"Brukeren er ikke aktiv."},403);
+  const {data:organization,error:organizationError}=await admin.from("organizations").select("roster_enabled").eq("id",me.organization_id).single();
+  if(organizationError||!organization)return json({error:"Bedriftsinnstillingen kunne ikke hentes."},503);
+  const rosterEnabled=organization.roster_enabled===true;
   const url=new URL(req.url),week=monday(String(url.searchParams.get("week")||todayOslo()));
   if(!dateOk(week))return json({error:"Ugyldig uke."},400);
 
   if(req.method==="GET"){
     const {data:schedule,error:scheduleError}=await admin.from("shift_schedules").select("id,week_start,status,published_snapshot,published_at,updated_at").eq("organization_id",me.organization_id).eq("week_start",week).maybeSingle();if(scheduleError)return json({error:scheduleError.message},400);
-    if(me.role!=="admin")return json({week_start:week,status:schedule?.status||"draft",shifts:schedule?.status==="published"?(schedule.published_snapshot||[]).filter((x:any)=>x.employee_id===me.id):[]});
+    if(me.role!=="admin")return json({roster_enabled:rosterEnabled,week_start:week,status:schedule?.status||"draft",shifts:rosterEnabled&&schedule?.status==="published"?(schedule.published_snapshot||[]).filter((x:any)=>x.employee_id===me.id):[]});
     const [{data:settings,error:settingsError},{data:staff,error:staffError},{data:shifts,error:shiftError},{data:vacations,error:vacationError},{data:sickLeave,error:sickError}]=await Promise.all([
       admin.from("shift_settings").select("day_start,day_end,evening_start,evening_end,night_start,night_end").eq("organization_id",me.organization_id).maybeSingle(),
       admin.from("employees").select("id,employee_number,full_name,email").eq("organization_id",me.organization_id).eq("active",true).order("full_name"),
@@ -36,11 +39,17 @@ Deno.serve(async(req:Request)=>{
       admin.from("sick_leave_requests").select("id,employee_id,absence_type,start_date,end_date,status,routine_version,employees(full_name)").eq("organization_id",me.organization_id).neq("status","rejected").lte("start_date",addDays(week,6)).gte("end_date",week)
     ]);if(settingsError||staffError||shiftError||vacationError||sickError)return json({error:settingsError?.message||staffError?.message||shiftError?.message||vacationError?.message||sickError?.message},400);
     const absences=[...(vacations||[]),...(sickLeave||[]).map((x:any)=>({...x,employee_name:x.employees?.full_name,request_type:"sick_leave"}))];
-    return json({week_start:week,schedule,settings:settings||{day_start:"08:00:00",day_end:"16:00:00",evening_start:"16:00:00",evening_end:"23:00:00",night_start:"23:00:00",night_end:"07:00:00"},employees:staff||[],shifts:shifts||[],absences});
+    return json({roster_enabled:rosterEnabled,week_start:week,schedule:rosterEnabled?schedule:null,settings:settings||{day_start:"08:00:00",day_end:"16:00:00",evening_start:"16:00:00",evening_end:"23:00:00",night_start:"23:00:00",night_end:"07:00:00"},employees:staff||[],shifts:rosterEnabled?(shifts||[]):[],absences});
   }
 
   if(me.role!=="admin")return json({error:"Kun administrator har tilgang."},403);
   let body:Record<string,any>={};try{body=await req.json()}catch{return json({error:"Ugyldig forespørsel."},400)}const action=String(body.action||"");
+  if(req.method==="PATCH"&&action==="set_enabled"){
+    if(typeof body.enabled!=="boolean"||typeof body.expected!=="boolean")return json({error:"Velg aktiv eller inaktiv."},400);
+    const {data,error}=await admin.rpc("set_roster_enabled",{p_actor:authData.user.id,p_enabled:body.enabled,p_expected:body.expected});
+    return error?json({error:error.message},409):json(data);
+  }
+  if(!rosterEnabled)return json({error:"Vaktliste er inaktiv for bedriften. Aktiver den under Vaktliste først."},409);
   if(req.method==="PATCH"&&action==="settings"){
     const values=["day_start","day_end","evening_start","evening_end","night_start","night_end"].reduce((o,k)=>({...o,[k]:cleanTime(body[k])}),{} as Record<string,string>);if(Object.values(values).some(v=>!timeOk(v)))return json({error:"Alle skifttider må være gyldige."},400);
     const {error}=await admin.from("shift_settings").upsert({organization_id:me.organization_id,...values,updated_by:authData.user.id,updated_at:new Date().toISOString()},{onConflict:"organization_id"});if(error)return json({error:error.message},400);return json({ok:true});

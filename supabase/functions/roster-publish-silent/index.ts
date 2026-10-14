@@ -14,6 +14,9 @@ Deno.serve(async(req:Request)=>{
   const admin=createClient(Deno.env.get("SUPABASE_URL")!,Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,{auth:{persistSession:false}});
   const {data:authData,error:authError}=await admin.auth.getUser(auth.slice(7));if(authError||!authData.user)return json({error:"Ugyldig innlogging."},401);
   const {data:me}=await admin.from("employees").select("id,organization_id,role,active").eq("auth_user_id",authData.user.id).maybeSingle();if(!me?.active||me.role!=="admin")return json({error:"Kun administrator har tilgang."},403);
+  const {data:organization,error:organizationError}=await admin.from("organizations").select("roster_enabled").eq("id",me.organization_id).single();
+  if(organizationError)return json({error:"Bedriftsinnstillingen kunne ikke hentes."},503);
+  if(!organization?.roster_enabled)return json({error:"Vaktliste er inaktiv for bedriften."},409);
   let body:Record<string,unknown>;try{body=await req.json()}catch{return json({error:"Ugyldig forespørsel."},400)}
   const requestedWeek=String(body.week||"");if(!dateOk(requestedWeek))return json({error:"Velg en gyldig uke."},400);const week=monday(requestedWeek);
   const {data:schedule,error:scheduleError}=await admin.from("shift_schedules").select("id").eq("organization_id",me.organization_id).eq("week_start",week).maybeSingle();if(scheduleError)return json({error:scheduleError.message},400);if(!schedule)return json({error:"Legg til minst én vakt før publisering."},409);
