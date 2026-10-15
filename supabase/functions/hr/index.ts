@@ -11,7 +11,7 @@ const sendEmail=async(to:string,subject:string,html:string)=>{const key=Deno.env
 type ContractModule={id:string;title:string;body:string;active:boolean};
 const cleanModules=(value:unknown):ContractModule[]=>{if(!Array.isArray(value))return[];return value.slice(0,40).map((m:any)=>({id:String(m?.id||crypto.randomUUID()).slice(0,80),title:String(m?.title||"").trim().slice(0,200),body:String(m?.body||"").trim().slice(0,12000),active:m?.active!==false})).filter(m=>m.title.length>=1&&m.body.length>=1)};
 const contractText=(text:string,employee:any)=>{const salaryType=employee.salary_type==="hourly"?"time":employee.salary_type==="monthly"?"måned":"[time/måned]",rate=employee.salary_rate==null?"[beløp]":Number(employee.salary_rate).toLocaleString("nb-NO",{minimumFractionDigits:2,maximumFractionDigits:2});return String(text).replaceAll("[dato]",employee.employed_from||"[dato]").replaceAll("[prosent]",employee.position_percent==null?"[prosent]":String(employee.position_percent)).replaceAll("[beløp]",rate).replaceAll("[time/måned]",salaryType)};
-const contractPdf=async(contract:any,employee:any,adminName:string)=>{
+const contractPdf=async(contract:any,employee:any,employerName:string)=>{
   const pdf=await PDFDocument.create(),font=await pdf.embedFont(StandardFonts.Helvetica),bold=await pdf.embedFont(StandardFonts.HelveticaBold);
   const width=595,height=842,margin=58,maxWidth=width-margin*2,lineHeight=14;let page=pdf.addPage([width,height]),y=height-58,pageNumber=1;
   const footer=()=>{page.drawText(String(pageNumber),{x:width/2-3,y:28,size:9,font,color:rgb(.35,.35,.35)})};
@@ -19,7 +19,7 @@ const contractPdf=async(contract:any,employee:any,adminName:string)=>{
   const wrap=(text:string,size:number,fontRef:any)=>{const words=String(text).replace(/\r/g,"").split(/\s+/),lines:string[]=[];let line="";for(const word of words){const candidate=line?`${line} ${word}`:word;if(fontRef.widthOfTextAtSize(candidate,size)<=maxWidth)line=candidate;else{if(line)lines.push(line);line=word}}if(line)lines.push(line);return lines};
   const drawParagraph=(text:string,size=10.5,fontRef=font,gap=8)=>{for(const paragraph of String(text).split(/\n+/)){const lines=wrap(paragraph,size,fontRef);if(y-lines.length*lineHeight<70)nextPage();for(const line of lines){page.drawText(line,{x:margin,y,size,font:fontRef,color:rgb(.08,.08,.08)});y-=lineHeight}y-=gap}};
   page.drawText("ARBEIDSAVTALE",{x:margin,y,size:20,font:bold,color:rgb(.06,.14,.12)});y-=34;
-  drawParagraph(`Arbeidsgiver: APART STAVANGER AS | Kontakt: ${adminName}`,10,font,5);
+  drawParagraph(`Arbeidsgiver: ${employerName}`,10,font,5);
   drawParagraph(`Arbeidstaker: ${employee.full_name} | ${[employee.address,[employee.postal_code,employee.city].filter(Boolean).join(" ")].filter(Boolean).join(", ")} | E-post: ${employee.email}${employee.phone_number?` | Telefon: ${employee.phone_number}`:""}`,10,font,16);
   const modules=(contract.locked_modules||contract.modules||[]).filter((m:ContractModule)=>m.active);
   modules.forEach((m:ContractModule,index:number)=>{if(y<120)nextPage();drawParagraph(`${index+1} ${m.title}`,14,bold,7);drawParagraph(contractText(m.body,employee),10.5,font,14)});
@@ -33,17 +33,20 @@ Deno.serve(async(req:Request)=>{
   const auth=req.headers.get("Authorization");if(!auth?.startsWith("Bearer "))return json({error:"Mangler innlogging."},401);
   const admin=createClient(Deno.env.get("SUPABASE_URL")!,Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,{auth:{persistSession:false}});
   const {data:authData,error:authError}=await admin.auth.getUser(auth.slice(7));if(authError||!authData.user)return json({error:"Ugyldig innlogging."},401);
-  const {data:me}=await admin.from("employees").select("id,organization_id,role,active,full_name,email").eq("auth_user_id",authData.user.id).maybeSingle();if(!me?.active)return json({error:"Brukeren er ikke aktiv."},403);
+  const {data:me}=await admin.from("employees").select("id,organization_id,role,active,full_name,email,portal_employee_id,portal_actor_only").eq("auth_user_id",authData.user.id).maybeSingle();if(!me?.active)return json({error:"Brukeren er ikke aktiv."},403);
 
   if(req.method==="GET"){
     await repairPendingDiplomas(admin,me);
     let docs=admin.from("hr_documents").select("id,employee_id,batch_id,title,document_type,original_name,mime_type,size_bytes,requires_signature,signature_status,read_at,signed_at,created_at,storage_path,employees(employee_number,full_name,email)").eq("organization_id",me.organization_id).order("created_at",{ascending:false});
-    let contracts=admin.from("hr_contracts").select("id,employee_id,title,content,locked_content,modules,locked_modules,status,version,locked_at,signed_at,created_at,updated_at,employees(employee_number,full_name,email,phone_number)").eq("organization_id",me.organization_id).order("updated_at",{ascending:false});
-    if(me.role!=="admin"){docs=docs.eq("employee_id",me.id);contracts=contracts.eq("employee_id",me.id).neq("status","draft")}
-    const [{data:docRows,error:docError},{data:contractRows,error:contractError},{data:staff,error:staffError}]=await Promise.all([docs,contracts,me.role==="admin"?admin.from("employees").select("id,employee_number,full_name,email,phone_number").eq("organization_id",me.organization_id).eq("active",true).order("full_name"):Promise.resolve({data:[],error:null})]);
+    let contracts=admin.from("hr_contracts").select("id,employee_id,title,content,locked_content,modules,locked_modules,status,version,signing_method,locked_at,signed_at,created_at,updated_at,employees(employee_number,full_name,email,phone_number)").eq("organization_id",me.organization_id).order("updated_at",{ascending:false});
+    if(me.role!=="admin"){docs=docs.eq("employee_id",me.id);contracts=contracts.eq("employee_id",me.id).in("status",["locked","pending_signature","signed","cancelled"])}
+    const [{data:docRows,error:docError},{data:contractRows,error:contractError},{data:staff,error:staffError}]=await Promise.all([docs,contracts,me.role==="admin"?admin.from("employees").select("id,employee_number,full_name,email,phone_number").eq("organization_id",me.organization_id).eq("active",true).eq("portal_actor_only",false).not("portal_employee_id","is",null).order("full_name"):Promise.resolve({data:[],error:null})]);
     if(docError||contractError||staffError)return json({error:docError?.message||contractError?.message||staffError?.message},400);
     const documents=await Promise.all((docRows||[]).map(async(row:any)=>{const {data}=await admin.storage.from("hr-documents").createSignedUrl(row.storage_path,900);const {storage_path,...safe}=row;return{...safe,url:data?.signedUrl||null}}));
-    return json({documents,contracts:contractRows||[],employees:staff||[],is_admin:me.role==="admin",signing_provider_configured:Boolean(Deno.env.get("SIGNICAT_CLIENT_ID"))});
+    // Recipients are resolved from the current shared register, never from browser-supplied names/emails.
+    const matches=(staff||[]).filter((e:any)=>me.portal_employee_id?e.id===me.id:e.email?.toLowerCase()===me.email?.toLowerCase());
+    const adminSigner=matches.length===1?matches[0]:null;
+    return json({documents,contracts:contractRows||[],employees:staff||[],admin_signer:adminSigner,is_admin:me.role==="admin",signing_provider_configured:false,signing_available:false});
   }
 
   let body:Record<string,unknown>;try{body=await req.json()}catch{return json({error:"Ugyldig forespørsel."},400)}const action=String(body.action||"");
@@ -52,8 +55,8 @@ Deno.serve(async(req:Request)=>{
     await admin.from("audit_logs").insert({organization_id:me.organization_id,actor_id:authData.user.id,action:"read_hr_document",entity_type:"hr_document",entity_id:id});return json({ok:true});
   }
   if(req.method==="POST"&&action==="download_contract_pdf"){
-    const id=String(body.id||"");let query=admin.from("hr_contracts").select("*,employees(full_name,email,phone_number)").eq("id",id).eq("organization_id",me.organization_id).in("status",["locked","pending_signature","signed"]);if(me.role!=="admin")query=query.eq("employee_id",me.id);const {data:contract}=await query.maybeSingle();if(!contract)return json({error:"Bare en låst kontrakt kan lastes ned."},404);
-    let employee=contract.locked_employee_snapshot||contract.employees;if(!contract.locked_employee_snapshot){const {data:details}=await admin.from("employee_private_details").select("address,postal_code,city,employed_from,position_percent,salary_type,salary_rate").eq("employee_id",contract.employee_id).maybeSingle();employee={...employee,...(details||{})}}const content_base64=await contractPdf(contract,employee,me.role==="admin"?me.full_name:"Augustum AS");
+    const id=String(body.id||"");let query=admin.from("hr_contracts").select("*,employees(full_name,email,phone_number)").eq("id",id).eq("organization_id",me.organization_id).in("status",me.role==="admin"?["signing_ready","locked","pending_signature","signed"]:["locked","pending_signature","signed"]);if(me.role!=="admin")query=query.eq("employee_id",me.id);const {data:contract}=await query.maybeSingle();if(!contract)return json({error:"Bare en låst kontrakt kan lastes ned."},404);
+    let employee=contract.locked_employee_snapshot||contract.employees;if(!contract.locked_employee_snapshot){const {data:details}=await admin.from("employee_private_details").select("address,postal_code,city,employed_from,position_percent,salary_type,salary_rate").eq("employee_id",contract.employee_id).maybeSingle();employee={...employee,...(details||{})}}const {data:organization}=await admin.from("organizations").select("name").eq("id",me.organization_id).single();const content_base64=await contractPdf(contract,employee,contract.locked_employer_name||organization?.name||"Arbeidsgiver");
     await admin.from("audit_logs").insert({organization_id:me.organization_id,actor_id:authData.user.id,action:"download_locked_contract_pdf",entity_type:"hr_contract",entity_id:id});
     return json({content_base64,file_name:`${contract.title.replace(/[^a-zA-Z0-9æøåÆØÅ_-]/g,"_")}-v${contract.version}.pdf`});
   }
@@ -85,24 +88,21 @@ Deno.serve(async(req:Request)=>{
     return json({documents:result.data,recipient_count:recipients.length,notification_requested:sendNotification,email_sent:notices.filter(Boolean).length},201);
   }
   if(req.method==="POST"&&action==="create_contract"){
-    const employeeId=String(body.employee_id||""),title=String(body.title||"").trim(),modules=cleanModules(body.modules);if(!employeeId||title.length<2||!modules.some(m=>m.active))return json({error:"Velg ansatt og behold minst én aktiv kontraktsmodul."},400);
-    const {data:employee}=await admin.from("employees").select("id").eq("id",employeeId).eq("organization_id",me.organization_id).eq("active",true).maybeSingle();if(!employee)return json({error:"Ansatt finnes ikke."},404);
+    const employeeId=String(body.employee_id||""),title=String(body.title||"").trim(),modules=cleanModules(body.modules);if(!employeeId||title.length<2||title.length>200||!modules.some(m=>m.active))return json({error:"Velg ansatt og behold minst én aktiv kontraktsmodul."},400);
+    const {data:employee}=await admin.from("employees").select("id").eq("id",employeeId).eq("organization_id",me.organization_id).eq("active",true).eq("portal_actor_only",false).not("portal_employee_id","is",null).maybeSingle();if(!employee)return json({error:"Ansatt finnes ikke."},404);
     const result=await admin.from("hr_contracts").insert({organization_id:me.organization_id,employee_id:employeeId,title,content:"Modulbasert kontrakt",modules,created_by:authData.user.id,updated_by:authData.user.id}).select("id,status,version").single();if(result.error)return json({error:result.error.message},400);
     await admin.from("audit_logs").insert({organization_id:me.organization_id,actor_id:authData.user.id,action:"create_hr_contract",entity_type:"hr_contract",entity_id:result.data.id});return json({contract:result.data},201);
   }
-  if(req.method==="PATCH"&&action==="update_contract"){
-    const id=String(body.id||""),title=String(body.title||"").trim(),modules=cleanModules(body.modules);if(title.length<2||!modules.some(m=>m.active))return json({error:"Kontrakten må ha tittel og minst én aktiv modul."},400);
-    const result=await admin.from("hr_contracts").update({title,modules,updated_by:authData.user.id,updated_at:new Date().toISOString()}).eq("id",id).eq("organization_id",me.organization_id).eq("status","draft").select("id").maybeSingle();if(result.error||!result.data)return json({error:"Bare kontrakter med status utkast kan redigeres."},409);
-    await admin.from("audit_logs").insert({organization_id:me.organization_id,actor_id:authData.user.id,action:"update_hr_contract",entity_type:"hr_contract",entity_id:id});return json({ok:true});
+  const draftActions:Record<string,string>={update_contract:"PATCH",delete_contract:"DELETE",prepare_signing:"PATCH",return_to_draft:"PATCH"};
+  if(draftActions[action]===req.method){
+    if(!body.id||!body.expected_updated_at||!Number.isFinite(Date.parse(String(body.expected_updated_at))))return json({error:"Oppdater kontraktlisten før du prøver igjen."},409);
+    const payload=action==="update_contract"?{title:String(body.title||"").trim(),modules:cleanModules(body.modules)}:{};
+    const {data,error}=await admin.rpc("hr_contract_draft_action",{p_org:me.organization_id,p_actor:authData.user.id,p_id:String(body.id),p_expected:String(body.expected_updated_at),p_action:action,p_body:payload});
+    if(error)return json({error:error.message},409);return json(data);
   }
-  if(req.method==="PATCH"&&action==="lock_contract"){
-    const id=String(body.id||"");const {data:contract}=await admin.from("hr_contracts").select("id,title,content,modules,employee_id,employees(full_name,email)").eq("id",id).eq("organization_id",me.organization_id).eq("status","draft").maybeSingle();if(!contract)return json({error:"Bare et utkast kan låses."},409);
-    const modules=cleanModules(contract.modules);if(!modules.some(m=>m.active))return json({error:"Kontrakten må ha minst én aktiv modul."},400);const {data:details}=await admin.from("employee_private_details").select("address,postal_code,city,employed_from,position_percent,salary_type,salary_rate").eq("employee_id",contract.employee_id).maybeSingle();const snapshot={...(contract.employees as any),...(details||{})};const now=new Date().toISOString(),result=await admin.from("hr_contracts").update({locked_content:"Modulbasert kontrakt",locked_modules:modules,locked_employee_snapshot:snapshot,status:"locked",locked_at:now,updated_by:authData.user.id,updated_at:now}).eq("id",id).eq("status","draft").select("id").maybeSingle();if(result.error||!result.data)return json({error:"Kontrakten kunne ikke låses."},409);
-    await admin.from("audit_logs").insert({organization_id:me.organization_id,actor_id:authData.user.id,action:"lock_hr_contract",entity_type:"hr_contract",entity_id:id});
-    const emailSent=await sendEmail((contract.employees as any).email,"Arbeidskontrakt klar",`<h2>Arbeidskontrakt klar</h2><p>Hei ${esc((contract.employees as any).full_name)}.</p><p><strong>${esc(contract.title)}</strong> er låst og tilgjengelig som PDF i Augustum Tid. Frem til BankID-signering er aktivert kan kontrakten skrives ut og signeres manuelt.</p>`);
-    return json({ok:true,email_sent:emailSent});
-  }
-  if(req.method==="POST"&&action==="start_signing")return json({error:"Signicat er ikke konfigurert ennå. Kontrakten er låst og klar for tilkobling."},409);
+  // Never silently send a contract or advertise configuration based on a client ID alone.
+  if(action==="lock_contract")return json({error:"Oppdater siden og bruk Send til signering fra lagrede utkast."},409);
+  if(req.method==="POST"&&action==="start_signing")return json({error:"BankID-utsending er ikke aktivert. Ingen kontrakt eller e-post er sendt."},409);
   return json({error:"Handling støttes ikke."},405);
 });
 
