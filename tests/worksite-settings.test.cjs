@@ -8,3 +8,14 @@ test('save resolves canonical coordinates again, ignoring forged location, radiu
 test('unknown selection and lookup failure cannot change location',async()=>{for(const f of [fixture(),fixture('admin',true)]){const r=await f.call({action:'save',query:'Testgata',address_id:'forged'});assert.ok([409,503].includes(r.status));assert.equal(f.calls.length,0)}});
 const {fixture:clockFixture}=require('./location-clock-fixture.cjs');
 test('200 metre server boundary: 199m accepted, 201m rejected; browser cannot widen radius',async()=>{for(const distance of [199,201]){const f=clockFixture();f.worksite.radius_meters=200;f.worksite.position_required=true;const r=await f.call({action:'clock_in',latitude:59+distance/6371000*180/Math.PI,longitude:6,accuracy:10,position_timestamp:Date.now(),radius_meters:99999,position_required:false});assert.equal(r.status,distance===199?201:403);if(distance>200)assert.equal(f.writes.length,0)}});
+test('manual map and geolocation saves work without geocoder and keep actor/200m server-owned',async()=>{
+ for(const source of ['map','geolocation']){
+  const f=fixture('admin',true),r=await f.call({action:'save_manual',source,confirmed:true,address:' PostNord – Jærveien 336 ',latitude:58.81275,longitude:5.70189,organization_id:'foreign',p_actor:'forged',radius_meters:9999});
+  assert.equal(r.status,200);assert.deepEqual(JSON.parse(JSON.stringify(f.calls[0].args)),{p_actor:'actor',p_address:'PostNord – Jærveien 336',p_latitude:58.81275,p_longitude:5.70189,p_source:source});assert.equal(r.body.worksite.radius_meters,200);
+ }
+});
+test('manual save rejects non-admin, unconfirmed, malformed and out-of-range points',async()=>{
+ const body={action:'save_manual',source:'map',confirmed:true,address:'Test terminal',latitude:59,longitude:6};
+ for(const patch of [{confirmed:false},{confirmed:'true'},{source:'Kartverket'},{latitude:null},{latitude:'59'},{latitude:86},{longitude:181},{longitude:null},{address:' '},{address:'x'.repeat(201)}]){const f=fixture();assert.equal((await f.call({...body,...patch})).status,400);assert.equal(f.calls.length,0)}
+ const f=fixture('employee');assert.equal((await f.call(body)).status,403);assert.equal(f.calls.length,0);
+});

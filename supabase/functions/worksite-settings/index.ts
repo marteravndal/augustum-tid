@@ -27,9 +27,15 @@ Deno.serve(async(req:Request)=>{
   return error?json({error:'Stemplingsstedet kunne ikke hentes.'},503):json({worksite:data});
  }
  let body:any;try{body=await req.json()}catch{return json({error:'Ugyldig forespørsel.'},400)}
+ if(body?.action==='save_manual'){
+  if(body.confirmed!==true||!['map','geolocation'].includes(body.source)||typeof body.address!=='string'||body.address.trim().length<3||body.address.length>200||!Number.isFinite(body.latitude)||Math.abs(body.latitude)>85||!Number.isFinite(body.longitude)||Math.abs(body.longitude)>180)return json({error:'Velg et punkt, skriv en adresse eller et stedsnavn, og bekreft området før lagring.'},400);
+  const {data,error}=await admin.rpc('save_company_clock_location',{p_actor:user.user.id,p_address:body.address.trim(),p_latitude:body.latitude,p_longitude:body.longitude,p_source:body.source});
+  return error?json({error:'Stemplingsstedet kunne ikke lagres. Prøv igjen.'},409):json({worksite:data});
+ }
  if(!body||!['search','save'].includes(body.action)||typeof body.query!=='string'||body.query.trim().length<3||body.query.length>200)return json({error:'Skriv gateadresse, husnummer og poststed.'},400);
  try{
-  // Resolve again on save: never accept browser-provided coordinates, radius or company.
+  // Address results are resolved again; manual points use a separate admin-only action.
+  // Neither path accepts a browser-provided company or radius.
   const addresses=await findAddresses(body.query.trim());
   if(body.action==='search')return json({addresses});
   const selected=addresses.find((address:any)=>address.id===body.address_id);
