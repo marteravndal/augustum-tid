@@ -2,7 +2,7 @@ import { previewEmail } from "../_shared/preview-email.ts";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { repairPendingDiplomas } from "../_shared/course-diplomas.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.116.0";
-import { PDFDocument, StandardFonts, rgb } from "npm:pdf-lib@1.17.1";
+import {contractPdf} from "../_shared/contract-pdf.ts";
 
 const cors={"Access-Control-Allow-Origin":"*","Access-Control-Allow-Headers":"authorization, apikey, content-type","Access-Control-Allow-Methods":"GET, POST, PATCH, DELETE, OPTIONS","Content-Type":"application/json"};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:cors});
@@ -10,23 +10,6 @@ const esc=(value:unknown)=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;"
 const sendEmail=async(to:string,subject:string,html:string)=>{const key=Deno.env.get("RESEND_API_KEY");if(!key)return false;try{return (await previewEmail("https://api.resend.com/emails",{method:"POST",headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/json"},body:JSON.stringify({from:"Augustum Tid <post@augustum.no>",to:[to],subject,html})})).ok}catch{return false}};
 type ContractModule={id:string;title:string;body:string;active:boolean};
 const cleanModules=(value:unknown):ContractModule[]=>{if(!Array.isArray(value))return[];return value.slice(0,40).map((m:any)=>({id:String(m?.id||crypto.randomUUID()).slice(0,80),title:String(m?.title||"").trim().slice(0,200),body:String(m?.body||"").trim().slice(0,12000),active:m?.active!==false})).filter(m=>m.title.length>=1&&m.body.length>=1)};
-const contractText=(text:string,employee:any)=>{const salaryType=employee.salary_type==="hourly"?"time":employee.salary_type==="monthly"?"måned":"[time/måned]",rate=employee.salary_rate==null?"[beløp]":Number(employee.salary_rate).toLocaleString("nb-NO",{minimumFractionDigits:2,maximumFractionDigits:2});return String(text).replaceAll("[dato]",employee.employed_from||"[dato]").replaceAll("[prosent]",employee.position_percent==null?"[prosent]":String(employee.position_percent)).replaceAll("[beløp]",rate).replaceAll("[time/måned]",salaryType)};
-const contractPdf=async(contract:any,employee:any,employerName:string)=>{
-  const pdf=await PDFDocument.create(),font=await pdf.embedFont(StandardFonts.Helvetica),bold=await pdf.embedFont(StandardFonts.HelveticaBold);
-  const width=595,height=842,margin=58,maxWidth=width-margin*2,lineHeight=14;let page=pdf.addPage([width,height]),y=height-58,pageNumber=1;
-  const footer=()=>{page.drawText(String(pageNumber),{x:width/2-3,y:28,size:9,font,color:rgb(.35,.35,.35)})};
-  const nextPage=()=>{footer();page=pdf.addPage([width,height]);pageNumber++;y=height-58};
-  const wrap=(text:string,size:number,fontRef:any)=>{const words=String(text).replace(/\r/g,"").split(/\s+/),lines:string[]=[];let line="";for(const word of words){const candidate=line?`${line} ${word}`:word;if(fontRef.widthOfTextAtSize(candidate,size)<=maxWidth)line=candidate;else{if(line)lines.push(line);line=word}}if(line)lines.push(line);return lines};
-  const drawParagraph=(text:string,size=10.5,fontRef=font,gap=8)=>{for(const paragraph of String(text).split(/\n+/)){const lines=wrap(paragraph,size,fontRef);if(y-lines.length*lineHeight<70)nextPage();for(const line of lines){page.drawText(line,{x:margin,y,size,font:fontRef,color:rgb(.08,.08,.08)});y-=lineHeight}y-=gap}};
-  page.drawText("ARBEIDSAVTALE",{x:margin,y,size:20,font:bold,color:rgb(.06,.14,.12)});y-=34;
-  drawParagraph(`Arbeidsgiver: ${employerName}`,10,font,5);
-  drawParagraph(`Arbeidstaker: ${employee.full_name} | ${[employee.address,[employee.postal_code,employee.city].filter(Boolean).join(" ")].filter(Boolean).join(", ")} | E-post: ${employee.email}${employee.phone_number?` | Telefon: ${employee.phone_number}`:""}`,10,font,16);
-  const modules=(contract.locked_modules||contract.modules||[]).filter((m:ContractModule)=>m.active);
-  modules.forEach((m:ContractModule,index:number)=>{if(y<120)nextPage();drawParagraph(`${index+1} ${m.title}`,14,bold,7);drawParagraph(contractText(m.body,employee),10.5,font,14)});
-  if(y<190)nextPage();y-=12;page.drawLine({start:{x:margin,y},end:{x:margin+190,y},thickness:.8,color:rgb(.25,.25,.25)});page.drawLine({start:{x:width-margin-190,y},end:{x:width-margin,y},thickness:.8,color:rgb(.25,.25,.25)});y-=18;
-  page.drawText("Sted, dato og arbeidsgivers signatur",{x:margin,y,size:9,font});page.drawText("Sted, dato og arbeidstakers signatur",{x:width-margin-190,y,size:9,font});footer();
-  const bytes=await pdf.save();let binary="";for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode(...bytes.slice(i,i+8192));return btoa(binary);
-};
 
 Deno.serve(async(req:Request)=>{
   if(req.method==="OPTIONS")return new Response("ok",{headers:cors});
@@ -56,6 +39,12 @@ Deno.serve(async(req:Request)=>{
   }
   if(req.method==="POST"&&action==="download_contract_pdf"){
     const id=String(body.id||"");let query=admin.from("hr_contracts").select("*,employees(full_name,email,phone_number)").eq("id",id).eq("organization_id",me.organization_id).in("status",me.role==="admin"?["signing_ready","locked","pending_signature","signed"]:["locked","pending_signature","signed"]);if(me.role!=="admin")query=query.eq("employee_id",me.id);const {data:contract}=await query.maybeSingle();if(!contract)return json({error:"Bare en låst kontrakt kan lastes ned."},404);
+    if(contract.provider==='signicat_sandbox'){
+      const {data:signing}=await admin.from('hr_signing_requests').select('original_path,signed_path').eq('contract_id',id).eq('organization_id',me.organization_id).maybeSingle();
+      const path=contract.status==='signed'?signing?.signed_path:signing?.original_path;
+      if(path){const {data:file,error}=await admin.storage.from('hr-documents').download(path);if(error||!file)return json({error:'PDF-en kunne ikke hentes fra arkivet.'},503);const bytes=new Uint8Array(await file.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode(...bytes.slice(i,i+8192));return json({content_base64:btoa(binary),file_name:`TEST-${contract.status==='signed'?'signert-':''}arbeidsavtale-v${contract.version}.pdf`});}
+      if(contract.status==='signed')return json({error:'Signert PDF mangler i arkivet.'},409);
+    }
     let employee=contract.locked_employee_snapshot||contract.employees;if(!contract.locked_employee_snapshot){const {data:details}=await admin.from("employee_private_details").select("address,postal_code,city,employed_from,position_percent,salary_type,salary_rate").eq("employee_id",contract.employee_id).maybeSingle();employee={...employee,...(details||{})}}const {data:organization}=await admin.from("organizations").select("name").eq("id",me.organization_id).single();const content_base64=await contractPdf(contract,employee,contract.locked_employer_name||organization?.name||"Arbeidsgiver");
     await admin.from("audit_logs").insert({organization_id:me.organization_id,actor_id:authData.user.id,action:"download_locked_contract_pdf",entity_type:"hr_contract",entity_id:id});
     return json({content_base64,file_name:`${contract.title.replace(/[^a-zA-Z0-9æøåÆØÅ_-]/g,"_")}-v${contract.version}.pdf`});
