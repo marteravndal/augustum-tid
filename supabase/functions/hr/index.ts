@@ -21,7 +21,7 @@ Deno.serve(async(req:Request)=>{
   if(req.method==="GET"){
     await repairPendingDiplomas(admin,me);
     let docs=admin.from("hr_documents").select("id,employee_id,batch_id,title,document_type,original_name,mime_type,size_bytes,requires_signature,signature_status,read_at,signed_at,created_at,storage_path,employees(employee_number,full_name,email)").eq("organization_id",me.organization_id).order("created_at",{ascending:false});
-    let contracts=admin.from("hr_contracts").select("id,employee_id,title,content,locked_content,modules,locked_modules,status,version,signing_method,locked_at,signed_at,created_at,updated_at,employees(employee_number,full_name,email,phone_number)").eq("organization_id",me.organization_id).order("updated_at",{ascending:false});
+    let contracts=admin.from("hr_contracts").select("id,employee_id,title,content,locked_content,modules,locked_modules,status,version,restarted_from_id,signing_method,locked_at,signed_at,created_at,updated_at,employees(employee_number,full_name,email,phone_number)").eq("organization_id",me.organization_id).order("updated_at",{ascending:false});
     if(me.role!=="admin"){docs=docs.eq("employee_id",me.id);contracts=contracts.eq("employee_id",me.id).in("status",["locked","pending_signature","signed","cancelled"])}
     const [{data:docRows,error:docError},{data:contractRows,error:contractError},{data:staff,error:staffError}]=await Promise.all([docs,contracts,me.role==="admin"?admin.from("employees").select("id,employee_number,full_name,email,phone_number").eq("organization_id",me.organization_id).eq("active",true).eq("portal_actor_only",false).not("portal_employee_id","is",null).order("full_name"):Promise.resolve({data:[],error:null})]);
     if(docError||contractError||staffError)return json({error:docError?.message||contractError?.message||staffError?.message},400);
@@ -81,6 +81,11 @@ Deno.serve(async(req:Request)=>{
     const {data:employee}=await admin.from("employees").select("id").eq("id",employeeId).eq("organization_id",me.organization_id).eq("active",true).eq("portal_actor_only",false).not("portal_employee_id","is",null).maybeSingle();if(!employee)return json({error:"Ansatt finnes ikke."},404);
     const result=await admin.from("hr_contracts").insert({organization_id:me.organization_id,employee_id:employeeId,title,content:"Modulbasert kontrakt",modules,created_by:authData.user.id,updated_by:authData.user.id}).select("id,status,version").single();if(result.error)return json({error:result.error.message},400);
     await admin.from("audit_logs").insert({organization_id:me.organization_id,actor_id:authData.user.id,action:"create_hr_contract",entity_type:"hr_contract",entity_id:result.data.id});return json({contract:result.data},201);
+  }
+  if(req.method==="POST"&&action==="restart_cancelled_contract"){
+    if(!body.id||!body.expected_updated_at||!Number.isFinite(Date.parse(String(body.expected_updated_at))))return json({error:"Oppdater kontraktlisten før du prøver igjen."},409);
+    const {data,error}=await admin.rpc("hr_restart_cancelled_contract",{p_org:me.organization_id,p_actor:authData.user.id,p_id:String(body.id),p_expected:String(body.expected_updated_at)});
+    if(error)return json({error:error.message},409);return json(data);
   }
   const draftActions:Record<string,string>={update_contract:"PATCH",delete_contract:"DELETE",prepare_signing:"PATCH",return_to_draft:"PATCH"};
   if(draftActions[action]===req.method){
