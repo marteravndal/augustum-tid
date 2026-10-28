@@ -1,0 +1,33 @@
+{
+  "id": "/",
+  "name": "Augustum Tid",
+  "short_name": "Augustum Tid",
+  "description": "Arbeidstid, vaktlister og personalinformasjon for Augustum AS.",
+  "lang": "nb-NO",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f6f3",
+  "theme_color": "#12251f",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/augustum-tid-preview-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/augustum-tid-preview-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/augustum-tid-preview-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
